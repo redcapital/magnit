@@ -1,0 +1,132 @@
+#!/usr/bin/env ruby
+
+class String
+  def colorize(color_code)
+    "\e[#{color_code}m#{self}\e[0m"
+  end
+
+  def green
+    colorize(32)
+  end
+
+  def red
+    colorize(31)
+  end
+end
+
+begin
+  rc_contents = IO.read(ENV['HOME'] + '/.magnetrc')
+rescue Errno::ENOENT
+  $stderr.puts <<-HELP
+Create a file ~/.magnetrc and specify your watchable directories in the format:
+
+directory: command
+
+Do not escape anything. For example:
+
+~/my/compass/project: compass watch
+/var/www/site 1/css/: stylus -w -c
+/var/www/site 2/css/: stylus -w -c base.styl main.styl
+
+HELP
+  exit 1
+end
+
+$cmds = []
+$dirs = []
+rc_contents.split("\n").each do |entry|
+  colon = entry.rindex(':')
+  if colon.nil?
+    $stderr.puts "Malformed entry: #{entry}"
+  else
+    $dirs << entry[0, colon].strip
+    $cmds << entry[(colon + 1)..(entry.length - 1)].strip
+  end
+end
+
+$pids = Array.new($dirs.length, nil)
+
+def list
+  $dirs.each_with_index do |dir, i|
+    status = $pids[i] ? 'STARTED'.green : 'STOPPED'.red
+    puts "#{i.to_s} [ #{status} ]: #{dir}"
+  end
+end
+
+def help
+  puts <<-HELP
+Available commands:
+
+l - list directories
+w N - start watching N
+s N - stop watching N
+q - quit
+h - this help
+
+N is zero-based index of the directory displayed in the listing
+
+HELP
+end
+
+def valid_identifier?(identifier)
+  identifier >= 0 && identifier < $dirs.length
+end
+
+def watch(identifier)
+  raise "Invalid identifier #{identifier.to_s}" unless valid_identifier?(identifier)
+  raise "Already watching #{identifier.to_s}" if $pids[identifier]
+  puts File.expand_path($dirs[identifier])
+  $pids[identifier] = spawn($cmds[identifier], chdir: File.expand_path($dirs[identifier]))
+  puts "spawned watcher with pid: #{$pids[identifier]}"
+end
+
+def stop(identifier)
+  raise "Invalid identifier #{identifier.to_s}" unless valid_identifier?(identifier)
+  raise "Not watching #{identifier.to_s}" unless $pids[identifier]
+  Process.kill('KILL', $pids[identifier])
+  Process.wait($pids[identifier])
+  puts "killed watcher with pid: #{$pids[identifier]}"
+  $pids[identifier] = nil
+end
+
+def quit
+  puts 'Killing remaining watchers'
+  $pids.each_index do |identifier|
+    stop(identifier) if $pids[identifier]
+  end
+  puts 'bye...'
+  exit
+end
+
+trap('INT') { quit }
+
+list
+
+while true
+  print '> '
+  command = gets
+  break unless command
+  command.strip!
+  next if command.empty?
+
+  begin
+    case command
+    when 'l'
+      list
+    when 'h'
+      help
+    when 'q'
+      break
+    when /^w (\d+)$/
+      watch($1.to_i)
+    when /^s (\d+)$/
+      stop($1.to_i)
+    else
+      puts 'Huh ?'
+    end
+  rescue RuntimeError => e
+    $stderr.puts "magnet error: #{e.to_s}"
+  end
+end
+
+quit
