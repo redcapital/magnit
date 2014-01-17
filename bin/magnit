@@ -1,4 +1,6 @@
 #!/usr/bin/env ruby
+require 'rbconfig'
+IS_WINDOWS = (RbConfig::CONFIG['host_os'] =~ /mswin|mingw|cygwin/)
 
 class String
   def colorize(color_code)
@@ -84,14 +86,25 @@ def watch(identifier)
   raise "Invalid identifier #{identifier.to_s}" unless valid_identifier?(identifier)
   raise "Already watching #{identifier.to_s}" if $pids[identifier]
   puts File.expand_path($dirs[identifier])
-  $pids[identifier] = spawn($cmds[identifier], chdir: File.expand_path($dirs[identifier]))
+  options = { chdir: File.expand_path($dirs[identifier]) }
+  # On *nix launch process as process group leader to be able to
+  # kill all children processes later
+  options[:pgroup] = true unless IS_WINDOWS
+  $pids[identifier] = spawn($cmds[identifier], options)
   puts "spawned watcher with pid: #{$pids[identifier]}"
 end
 
 def stop(identifier)
   raise "Invalid identifier #{identifier.to_s}" unless valid_identifier?(identifier)
   raise "Not watching #{identifier.to_s}" unless $pids[identifier]
-  Process.kill('KILL', $pids[identifier])
+  # Take care of child processes
+  # On Windows it's better handled by taskkill
+  # On nix just pass negative process group
+  if IS_WINDOWS
+    `taskkill /F /T /PID #{$pids[identifier]}`
+  else
+    Process.kill('INT', -$pids[identifier])
+  end
   Process.wait($pids[identifier])
   puts "killed watcher with pid: #{$pids[identifier]}"
   $pids[identifier] = nil
@@ -133,7 +146,7 @@ while true
       puts 'Huh ?'
     end
   rescue RuntimeError => e
-    $stderr.puts "magnet error: #{e.to_s}"
+    $stderr.puts "magnit error: #{e.to_s}"
   end
 end
 
